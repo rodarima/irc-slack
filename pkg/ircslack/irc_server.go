@@ -257,11 +257,6 @@ func IrcAfterLoggingIn(ctx *IrcContext, rtm *slack.RTM) error {
 		log.Warningf("Failed to send IRC message: %v", err)
 	}
 
-	// get channels
-	if err := joinChannels(ctx); err != nil {
-		return err
-	}
-
 	go eventHandler(ctx, rtm)
 	return nil
 }
