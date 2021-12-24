@@ -42,6 +42,7 @@ var IrcCommandHandlers = map[string]IrcCommandHandler{
 	"PART":    IrcPartHandler,
 	"TOPIC":   IrcTopicHandler,
 	"NAMES":   IrcNamesHandler,
+	"LIST":    IrcListHandler,
 }
 
 // IrcNumericsSafeToChunk is a list of IRC numeric replies that are safe
@@ -859,5 +860,29 @@ func IrcNamesHandler(ctx *IrcContext, prefix, cmd string, args []string, trailin
 	// RPL_ENDOFNAMES
 	if err := SendIrcNumeric(ctx, 366, fmt.Sprintf("%s %s", ctx.Nick(), ch.IRCName()), "End of NAMES list"); err != nil {
 		log.Warningf("Failed to send IRC ENDOFNAMES message: %v", err)
+	}
+}
+
+// IrcListHandler is called when a LIST command is sent
+func IrcListHandler(ctx *IrcContext, prefix, cmd string, args []string, trailing string) {
+	for _, ch := range ctx.Channels.AsMap() {
+		data := fmt.Sprintf("%s %s %d", ctx.Nick(), ch.IRCName(), ch.NumMembers)
+
+		// Use the Slack Purpose first, as it is more commonly used, or
+		// fallback to Slack Topic if unset
+		desc := ch.Purpose.Value
+		if desc == "" {
+			desc = ch.Topic.Value
+		}
+
+		// RPL_LIST
+		if err := SendIrcNumeric(ctx, 322, data, desc); err != nil {
+			log.Warningf("Failed to send IRC LIST message: %v", err)
+		}
+	}
+
+	// RPL_LISTEND
+	if err := SendIrcNumeric(ctx, 323, ctx.Nick(), "End of LIST"); err != nil {
+		log.Warningf("Failed to send IRC LISTEND message: %v", err)
 	}
 }
