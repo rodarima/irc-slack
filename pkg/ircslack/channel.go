@@ -14,8 +14,8 @@ import (
 // is within another message in a public, private, or multi-party conversation.
 const (
 	ChannelPrefixPublicChannel  = "#"
-	ChannelPrefixPrivateChannel = "@"
-	ChannelPrefixMpIM           = "&"
+	ChannelPrefixPrivateChannel = "&"
+	ChannelPrefixMpIM           = "@"
 	// NOTE: a thread is not a channel type
 	ChannelPrefixThread = "+"
 )
@@ -130,7 +130,7 @@ func (c *Channel) IRCName() string {
 		return name
 	default:
 		log.Warningf("Unknown channel type for channel %+v", c)
-		return "<unknow-channel-type>"
+		return "?" + c.Name
 	}
 }
 

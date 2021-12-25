@@ -166,9 +166,9 @@ func IrcSendChanInfoAfterJoinCustom(ctx *IrcContext, chanName, chanID, topic str
 		memberNames = append(memberNames, m.Name)
 	}
 	// TODO wrap all these Conn.Write into a function
-	if _, err := ctx.Conn.Write([]byte(fmt.Sprintf(":%s JOIN %s\r\n", ctx.Mask(), chanName))); err != nil {
-		log.Warningf("Failed to send IRC JOIN message: %v", err)
-	}
+	//if _, err := ctx.Conn.Write([]byte(fmt.Sprintf(":%s JOIN %s\r\n", ctx.Mask(), chanName))); err != nil {
+	//	log.Warningf("Failed to send IRC JOIN message: %v", err)
+	//}
 	// RPL_TOPIC
 	if err := SendIrcNumeric(ctx, 332, fmt.Sprintf("%s %s", ctx.Nick(), chanName), topic); err != nil {
 		log.Warningf("Failed to send IRC TOPIC message: %v", err)
@@ -243,7 +243,8 @@ func IrcAfterLoggingIn(ctx *IrcContext, rtm *slack.RTM) error {
 		}
 	}
 	// RPL_ISUPPORT
-	if err := SendIrcNumeric(ctx, 005, ctx.Nick(), "CHANTYPES="+strings.Join(SupportedChannelPrefixes(), "")); err != nil {
+	isupport := fmt.Sprintf("%s %s", ctx.Nick(), "CHANTYPES="+strings.Join(SupportedChannelPrefixes(), ""))
+	if err := SendIrcNumeric(ctx, 005, isupport, "are supported by this server"); err != nil {
 		log.Warningf("Failed to send IRC message: %v", err)
 	}
 	motd(fmt.Sprintf("This is an IRC-to-Slack gateway, written by %s <%s>.", ProjectAuthor, ProjectAuthorEmail))
@@ -259,9 +260,9 @@ func IrcAfterLoggingIn(ctx *IrcContext, rtm *slack.RTM) error {
 	}
 
 	// get channels
-	if err := joinChannels(ctx); err != nil {
-		return err
-	}
+	//if err := joinChannels(ctx); err != nil {
+	//	return err
+	//}
 
 	go eventHandler(ctx, rtm)
 	return nil
@@ -611,13 +612,15 @@ func IrcWhoHandler(ctx *IrcContext, prefix, cmd string, args []string, trailing 
 			}
 			return
 		}
-		for _, un := range ch.Members {
-			// FIXME can we use the cached users?
-			u := ctx.Users.ByID(un)
-			if u == nil {
-				log.Warningf("Failed to get info for user name '%s'", un)
-				continue
-			}
+		
+		members, err := ChannelMembers(ctx, ch.ID)
+		if err != nil {
+			jErr := fmt.Errorf("Failed to fetch users in channel `%s (channel ID: %s): %v", ch.Name, ch.ID, err)
+			ctx.SendUnknownError(jErr.Error())
+			return
+		}
+
+		for _, u := range members {
 			log.Infof("%+v", u.Name)
 			rargs = fmt.Sprintf("%s %s %s %s %s %s *", ctx.Nick(), target, u.ID, ctx.ServerName, ctx.ServerName, u.Name)
 			desc = fmt.Sprintf("0 %s", u.RealName)
@@ -673,50 +676,71 @@ func IrcWhoisHandler(ctx *IrcContext, prefix, cmd string, args []string, trailin
 		if err := SendIrcNumeric(ctx, 401, ctx.Nick(), fmt.Sprintf("No such nick %s", username)); err != nil {
 			log.Warningf("Failed to send IRC message: %v", err)
 		}
+		return
+	}
+
+	//ReplyIRC(301, "%s: %s", username, awayStatus)
+
+	// RPL_WHOISUSER
+	// "<nick> <user> <host> * :<real name>"
+	if err := SendIrcNumeric(ctx, 311, fmt.Sprintf("%s %s %s %s *", ctx.Nick(), username, username, "slack.com"), user.RealName); err != nil {
+		log.Warningf("Failed to send IRC message: %v", err)
+	}
+	// RPL_WHOISSERVER
+	// "<nick> <server> :<server info>"
+	if err := SendIrcNumeric(ctx, 312, fmt.Sprintf("%s %s %s", ctx.Nick(), username, "slack.com"), "irc-slack"); err != nil {
+		log.Warningf("Failed to send IRC message: %v", err)
+	}
+	// Send additional user status information, abusing the RPL_WHOISSERVER
+	// reply. If there is a better method, please let us know!
+	if user.Profile.StatusText != "" || user.Profile.StatusEmoji != "" {
+		userStatus := fmt.Sprintf("user status: '%s' %s", user.Profile.StatusText, user.Profile.StatusEmoji)
+		if user.Profile.StatusExpiration != 0 {
+			userStatus += " until " + time.Unix(int64(user.Profile.StatusExpiration), 0).String()
+		}
+		if err := SendIrcNumeric(ctx, 312, fmt.Sprintf("%s %s %s", ctx.Nick(), username, "slack.com"), userStatus); err != nil {
+			log.Warningf("Failed to send IRC message: %v", err)
+		}
+	}
+
+	// Get user presence
+	if presence, err := ctx.SlackClient.GetUserPresence(user.ID); err != nil {
+		log.Warningf("Cannot get user presence: %v", err)
 	} else {
-		// RPL_WHOISUSER
-		// "<nick> <user> <host> * :<real name>"
-		if err := SendIrcNumeric(ctx, 311, fmt.Sprintf("%s %s %s %s *", ctx.Nick(), username, user.ID, ctx.ServerName), user.RealName); err != nil {
-			log.Warningf("Failed to send IRC message: %v", err)
-		}
-		// RPL_WHOISSERVER
-		// "<nick> <server> :<server info>"
-		if err := SendIrcNumeric(ctx, 312, fmt.Sprintf("%s %s %s", ctx.Nick(), username, ctx.ServerName), "irc-slack, https://github.com/insomniacslk/irc-slack"); err != nil {
-			log.Warningf("Failed to send IRC message: %v", err)
-		}
-		// Send additional user status information, abusing the RPL_WHOISSERVER
-		// reply. If there is a better method, please let us know!
-		if user.Profile.StatusText != "" || user.Profile.StatusEmoji != "" {
-			userStatus := fmt.Sprintf("user status: '%s' %s", user.Profile.StatusText, user.Profile.StatusEmoji)
-			if user.Profile.StatusExpiration != 0 {
-				userStatus += " until " + time.Unix(int64(user.Profile.StatusExpiration), 0).String()
-			}
-			if err := SendIrcNumeric(ctx, 312, fmt.Sprintf("%s %s %s", ctx.Nick(), username, ctx.ServerName), userStatus); err != nil {
+		// Only set away if the user is offline
+		if !presence.Online {
+			log.Infof("Presence for user %s: %v", username, presence)
+			userStatus := "disconnected from Slack"
+			preamble := fmt.Sprintf("%s %s", ctx.Nick(), username)
+			if err := SendIrcNumeric(ctx, 301, preamble, userStatus); err != nil {
 				log.Warningf("Failed to send IRC message: %v", err)
 			}
 		}
-		// RPL_WHOISCHANNELS
-		// "<nick> :{[@|+]<channel><space>}"
-		var channels []string
-		for chname, ch := range ctx.Channels.AsMap() {
-			for _, u := range ch.Members {
-				if u == user.ID {
-					channels = append(channels, chname)
-				}
+	}
+
+	// RPL_WHOISCHANNELS
+	// "<nick> :{[@|+]<channel><space>}"
+	var channels []string
+	for chname, ch := range ctx.Channels.AsMap() {
+		for _, u := range ch.Members {
+			if u == user.ID {
+				channels = append(channels, chname)
 			}
 		}
+	}
+	if len(channels) > 0 {
 		if err := SendIrcNumeric(ctx, 319, fmt.Sprintf("%s %s", ctx.Nick(), username), strings.Join(channels, " ")); err != nil {
 			log.Warningf("Failed to send IRC message: %v", err)
 		}
-		if withIdleTime {
-			// TODO send RPL_WHOISIDLE (317)
-			// "<nick> <integer> :seconds idle"
-		}
-		// RPL_ENDOFWHOIS
-		// "<nick> :End of /WHOIS list"
-		if err := SendIrcNumeric(ctx, 318, fmt.Sprintf("%s %s", ctx.Nick(), username), ":End of /WHOIS list"); err != nil {
-			log.Warningf("Failed to send IRC message: %v", err)
-		}
+	}
+	if withIdleTime {
+		// TODO send RPL_WHOISIDLE (317)
+		// "<nick> <integer> :seconds idle"
+	}
+	// RPL_ENDOFWHOIS
+	// "<nick> :End of /WHOIS list"
+	if err := SendIrcNumeric(ctx, 318, fmt.Sprintf("%s %s", ctx.Nick(), username), ":End of /WHOIS list"); err != nil {
+		log.Warningf("Failed to send IRC message: %v", err)
 	}
 }
 
@@ -736,12 +760,32 @@ func IrcJoinHandler(ctx *IrcContext, prefix, cmd string, args []string, trailing
 			log.Debugf("JOIN: ignoring channel `%s`, cannot join multi-party IMs or threads", channame)
 			continue
 		}
-		sch, _, _, err := ctx.SlackClient.JoinConversation(channame)
+
+		// Ensure the channel exists
+		var channel *Channel = nil
+		for _, c := range ctx.Channels.AsMap() {
+			if c.IRCName() == channame {
+				channel = &c
+				break
+			}
+		}
+
+		if channel == nil {
+			data := fmt.Sprintf("%s %s", ctx.Nick(), channame)
+			if err := SendIrcNumeric(ctx, 441, data, "No such channel"); err != nil {
+				log.Warningf("Failed to send IRC message: %v", err)
+			}
+			continue
+		}
+
+		sch, _, _, err := ctx.SlackClient.JoinConversation(channel.ID)
 		if err != nil {
 			log.Warningf("Cannot join channel %s: %v", channame, err)
+			ctx.SendUnknownError("Cannot join channel %s: %v", channame, err)
 			continue
 		}
 		log.Infof("Joined channel %s", channame)
+
 		ch := Channel(*sch)
 		if err := joinChannel(ctx, &ch); err != nil {
 			log.Warningf("Failed to join channel `%s`: %v", ch.Name, err)

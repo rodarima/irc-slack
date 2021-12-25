@@ -317,9 +317,6 @@ func eventHandler(ctx *IrcContext, rtm *slack.RTM) {
 				log.Warningf("Unknown channel: %s", ev.Channel)
 				continue
 			}
-			if _, err := ctx.Conn.Write([]byte(fmt.Sprintf(":%s JOIN %s\r\n", ctx.Mask(), ch.IRCName()))); err != nil {
-				log.Warningf("Failed to send IRC JOIN message for `%s`: %v", ch.IRCName(), err)
-			}
 		case *slack.MemberLeftChannelEvent:
 			// This is the currently preferred way to notify when a user leaves a
 			// channel, see https://api.slack.com/changelog/2017-05-rethinking-channel-entrance-and-exit-events-and-messages
